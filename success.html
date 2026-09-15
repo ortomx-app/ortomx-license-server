@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>¡Gracias por tu compra! — OrtoMX Pro</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #1f1f1f;
+    background: #fff;
+  }
+  header {
+    background: linear-gradient(135deg, #1a73e8, #0d47a1);
+    color: #fff;
+    text-align: center;
+    padding: 56px 16px 64px;
+  }
+  header h1 { font-size: 24px; margin: 0 0 6px; }
+  header p { font-size: 15px; opacity: 0.92; }
+  main { max-width: 520px; margin: -32px auto 0; padding: 0 16px 60px; }
+  .card {
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 12px;
+    padding: 26px 28px;
+    box-shadow: 0 6px 24px rgba(20,40,90,0.06);
+    text-align: center;
+  }
+  .key {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    background: #f2f6fc;
+    border: 1px dashed #0d47a1;
+    border-radius: 8px;
+    padding: 14px 10px;
+    margin: 18px 0;
+    word-break: break-all;
+  }
+  .steps { text-align: left; font-size: 14px; line-height: 1.6; margin-top: 20px; padding-left: 20px; }
+  #loading, #errorBox { font-size: 14.5px; color: #555; }
+  #errorBox { display: none; color: #b3261e; }
+  button.copy { margin-top: 6px; padding: 8px 16px; border-radius: 8px; border: 1px solid #0d47a1; background: #fff; color: #0d47a1; font-weight: 600; cursor: pointer; }
+  footer { text-align: center; padding: 20px 16px 50px; color: #777; font-size: 13px; }
+  footer a { color: #1a73e8; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🎉 ¡Gracias por tu compra!</h1>
+    <p>Tu licencia de OrtoMX Pro está lista.</p>
+  </header>
+  <main>
+    <div class="card">
+      <div id="loading">Buscando tu clave de licencia...</div>
+      <div id="errorBox">
+        No encontramos tu licencia todavía. Espera unos segundos y recarga esta página
+        (a veces el sistema tarda un momento en procesar el pago).
+      </div>
+      <div id="result" style="display:none;">
+        <p>Tu clave de licencia:</p>
+        <div class="key" id="keyText"></div>
+        <button class="copy" id="copyBtn">Copiar clave</button>
+        <ol class="steps">
+          <li>Abre la extensión OrtoMX en Chrome (ícono en la barra de herramientas).</li>
+          <li>Ve a "Activar Pro" o a la sección de licencia.</li>
+          <li>Pega tu clave y confirma.</li>
+        </ol>
+      </div>
+    </div>
+  </main>
+  <footer>
+    ¿Problemas para activar tu licencia? Escríbenos a
+    <a href="mailto:genoinmo@gmail.com">genoinmo@gmail.com</a> con tu correo de compra.
+  </footer>
+
+  <script>
+    const API_BASE = "https://ortomx-license-server.onrender.com";
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get("session_id");
+
+    const loading = document.getElementById("loading");
+    const errorBox = document.getElementById("errorBox");
+    const result = document.getElementById("result");
+    const keyText = document.getElementById("keyText");
+    const copyBtn = document.getElementById("copyBtn");
+
+    async function fetchLicense() {
+      if (!sessionId) {
+        loading.style.display = "none";
+        errorBox.style.display = "block";
+        errorBox.textContent = "No se encontró información de tu compra en el enlace. Si acabas de pagar, revisa tu correo de confirmación de Stripe.";
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/api/license/by-session?session_id=${encodeURIComponent(sessionId)}`);
+        if (!res.ok) throw new Error("not_ready");
+        const data = await res.json();
+        loading.style.display = "none";
+        keyText.textContent = data.key;
+        result.style.display = "block";
+      } catch (err) {
+        loading.style.display = "none";
+        errorBox.style.display = "block";
+      }
+    }
+
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(keyText.textContent).then(() => {
+        copyBtn.textContent = "¡Copiada!";
+        setTimeout(() => (copyBtn.textContent = "Copiar clave"), 1800);
+      });
+    });
+
+    fetchLicense();
+  </script>
+</body>
+</html>
