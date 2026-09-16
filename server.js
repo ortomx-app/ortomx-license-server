@@ -368,6 +368,41 @@ app.get("/api/license/by-reference", (req, res) => {
   res.json({ key: entry.key, plan: entry.plan });
 });
 
+// --- Herramienta de administrador: genera (o reutiliza) TU PROPIA clave de
+// licencia Pro, sin límite de uso ni fecha de vencimiento, sin pasar por
+// Stripe ni Mercado Pago — para que el dueño de la extensión pueda usarla
+// libremente. Protegida con el mismo ADMIN_SETUP_SECRET que ya configuraste.
+// Visítala desde el navegador: /admin/create-owner-license?secret=TU-SECRETO
+// Si la vuelves a visitar, te regresa la MISMA clave que ya tenías (no crea
+// una nueva cada vez), así que puedes guardar esta URL para consultarla luego.
+app.get("/admin/create-owner-license", (req, res) => {
+  if (!process.env.ADMIN_SETUP_SECRET || req.query.secret !== process.env.ADMIN_SETUP_SECRET) {
+    return res.status(403).json({ error: "Secreto inválido o falta configurar ADMIN_SETUP_SECRET." });
+  }
+  const db = readDb();
+  let entry = Object.values(db.licenses).find((l) => l.billing === "owner");
+  if (!entry) {
+    const key = generateLicenseKey();
+    entry = {
+      key,
+      plan: "pro-owner",
+      billing: "owner",
+      createdAt: Date.now(),
+      expiresAt: null,
+      status: "active"
+    };
+    db.licenses[key] = entry;
+    writeDb(db);
+  } else if (entry.status !== "active") {
+    entry.status = "active";
+    writeDb(db);
+  }
+  res.json({
+    key: entry.key,
+    instrucciones: "Pega esta clave en la extensión (ícono → Opciones → sección de licencia) y presiona Activar."
+  });
+});
+
 // --- Validar una clave de licencia (llamado desde la extensión) --------
 app.post("/api/license/validate", (req, res) => {
   const { key } = req.body || {};
