@@ -22,8 +22,17 @@ const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
+const { MercadoPagoConfig, Preference, Payment } = require("mercadopago");
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+
+// Mercado Pago es opcional: si no configuras MP_ACCESS_TOKEN, esas rutas
+// simplemente responderán con un error claro en vez de tronar el servidor
+// completo (así puedes seguir usando solo Stripe si prefieres).
+const mpClient = process.env.MP_ACCESS_TOKEN
+  ? new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN })
+  : null;
+
 const DB_PATH = path.join(__dirname, "licenses.json");
 
 function readDb() {
@@ -116,6 +125,100 @@ app.get("/api/license/by-session", (req, res) => {
   if (!session_id) return res.status(400).json({ error: "Falta session_id" });
   const db = readDb();
   const entry = Object.values(db.licenses).find((l) => l.stripeSessionId === session_id);
+  if (!entry) return res.status(404).json({ error: "Licencia no encontrada (¿el webhook ya se procesó?)" });
+  res.json({ key: entry.key, plan: entry.plan });
+});
+
+// --- Mercado Pago: crear una "preferencia" de pago (equivalente a la
+// sesión de Stripe Checkout) --------------------------------------------
+app.post("/api/checkout/mercadopago/session", async (req, res) => {
+  if (!mpClient) {
+    return res.status(500).json({ error: "Mercado Pago no está configurado en el servidor (falta MP_ACCESS_TOKEN)." });
+  }
+  try {
+    // Generamos nuestra propia referencia para poder encontrar la licencia
+    // después, ya que Mercado Pago nos la regresa tal cual en la URL de
+    // regreso (parámetro external_reference) y también en el webhook.
+    const externalReference = crypto.randomUUID();
+    const preference = new Preference(mpClient);
+    const result = await preference.create({
+      body: {
+        items: [
+          {
+            title: "OrtoMX Pro — acceso de por vida",
+            quantity: 1,
+            unit_price: Number(process.env.MP_PRICE_MXN || 99),
+            currency_id: "MXN"
+          }
+        ],
+        external_reference: externalReference,
+        back_urls: {
+          success: process.env.MP_SUCCESS_URL || process.env.SUCCESS_URL,
+          failure: process.env.MP_FAILURE_URL || process.env.CANCEL_URL,
+          pending: process.env.MP_SUCCESS_URL || process.env.SUCCESS_URL
+        },
+        auto_return: "approved",
+        notification_url: process.env.MP_WEBHOOK_URL // ej. https://TU-DOMINIO/webhook/mercadopago
+      }
+    });
+    res.json({ url: result.init_point, externalReference });
+  } catch (err) {
+    console.error("Error creando preferencia de Mercado Pago:", err);
+    res.status(500).json({ error: "No se pudo crear la preferencia de pago." });
+  }
+});
+
+// --- Webhook de Mercado Pago: nos avisa cuando un pago cambia de estado.
+// A diferencia de Stripe, aquí solo nos llega un id — hay que consultar el
+// pago completo a la API para confirmar que de verdad está "approved"
+// antes de generar la licencia (nunca confíes solo en la notificación). ---
+app.post("/webhook/mercadopago", async (req, res) => {
+  try {
+    if (!mpClient) return res.sendStatus(200);
+
+    const topic = req.query.topic || req.query.type || req.body?.type;
+    const paymentId = req.query["data.id"] || req.body?.data?.id || req.query.id;
+
+    if (topic === "payment" && paymentId) {
+      const payment = new Payment(mpClient);
+      const info = await payment.get({ id: paymentId });
+
+      if (info.status === "approved") {
+        const db = readDb();
+        const yaExiste = Object.values(db.licenses).some((l) => l.mpPaymentId === String(paymentId));
+        if (!yaExiste) {
+          const key = generateLicenseKey();
+          db.licenses[key] = {
+            key,
+            mpPaymentId: String(paymentId),
+            mpExternalReference: info.external_reference || null,
+            customerEmail: info.payer?.email || null,
+            plan: "pro",
+            createdAt: Date.now(),
+            expiresAt: null,
+            status: "active"
+          };
+          writeDb(db);
+          console.log(`✅ Licencia generada (Mercado Pago) para pago ${paymentId}: ${key}`);
+        }
+      }
+    }
+    res.sendStatus(200);
+  } catch (err) {
+    // Respondemos 200 igual para que Mercado Pago no reintente en bucle;
+    // el error ya queda registrado en los logs del servidor para revisarlo.
+    console.error("Error procesando webhook de Mercado Pago:", err);
+    res.sendStatus(200);
+  }
+});
+
+// --- Consultar la licencia generada para una referencia de Mercado Pago
+// (equivalente a /api/license/by-session, pero para MP) ------------------
+app.get("/api/license/by-reference", (req, res) => {
+  const { ref } = req.query;
+  if (!ref) return res.status(400).json({ error: "Falta ref" });
+  const db = readDb();
+  const entry = Object.values(db.licenses).find((l) => l.mpExternalReference === ref);
   if (!entry) return res.status(404).json({ error: "Licencia no encontrada (¿el webhook ya se procesó?)" });
   res.json({ key: entry.key, plan: entry.plan });
 });
